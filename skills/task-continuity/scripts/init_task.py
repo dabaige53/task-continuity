@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Initialize a task folder or create a new run inside an existing task.
+"""Initialize a task folder, return the active run, or create a new run.
 
 Examples:
   python scripts/init_task.py "客户方案修订"
   python scripts/init_task.py "客户方案修订" --root ./tasks --run "initial-intake"
-  python scripts/init_task.py --task-dir ./tasks/客户方案修订-20260417 --run "提炼客户反馈"
+  python scripts/init_task.py --task-dir ./tasks/客户方案修订-20260417
+  python scripts/init_task.py --task-dir ./tasks/客户方案修订-20260417 --new-run --run "提炼客户反馈"
   python scripts/init_task.py "客户方案修订" --request "整理客户反馈并重写方案结构" --json
 """
 
@@ -17,13 +18,14 @@ import sys
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f]')
 MULTI_SPACE_RE = re.compile(r'\s+')
 MULTI_HYPHEN_RE = re.compile(r'-{2,}')
 RUN_PREFIX_RE = re.compile(r'^(\d{3})-')
+RUN_FOLDER_RE = re.compile(r'^(\d{3})-(.+)-(\d{8})$')
 WINDOWS_RESERVED_NAMES = {
     'CON', 'PRN', 'AUX', 'NUL',
     'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
@@ -222,6 +224,7 @@ def default_index(title: str, short_name: str, created_at: str, run_folder_name:
         'status': 'in_progress',
         'created_at': created_at,
         'last_updated': created_at,
+        'active_run': run_folder_name,
         'last_run': run_folder_name,
         'aliases': [],
         'tags': [],
@@ -242,6 +245,64 @@ def next_run_number(runs_dir: Path) -> int:
     return max_number + 1
 
 
+def parse_run_folder_name(folder_name: str) -> Tuple[int, str]:
+    match = RUN_FOLDER_RE.match(folder_name)
+    if match:
+        return int(match.group(1)), match.group(2)
+    prefix = RUN_PREFIX_RE.match(folder_name)
+    if prefix:
+        return int(prefix.group(1)), folder_name
+    return 0, folder_name
+
+
+def ensure_run_summary(run_dir: Path) -> Path:
+    run_summary_path = run_dir / 'run_summary.md'
+    if run_summary_path.exists():
+        return run_summary_path
+    run_number, run_name = parse_run_folder_name(run_dir.name)
+    write_text(run_summary_path, run_summary_template(run_number or 1, run_name, timestamp()))
+    return run_summary_path
+
+
+def update_index(task_dir: Path, updates: Dict[str, Any], touch_time: bool = True) -> None:
+    index_path = task_dir / 'index.json'
+    index_data = load_json(index_path)
+    if not index_data:
+        return
+    index_data.update(updates)
+    if touch_time:
+        index_data['last_updated'] = timestamp()
+    save_json(index_path, index_data)
+
+
+def resolve_active_run(task_dir: Path) -> Tuple[str, Path]:
+    runs_dir = task_dir / 'runs'
+    if not runs_dir.exists() or not runs_dir.is_dir():
+        raise ValueError(f'Runs directory not found: {runs_dir}')
+
+    index_data = load_json(task_dir / 'index.json')
+    for key in ('active_run', 'last_run'):
+        run_name = str(index_data.get(key, '')).strip()
+        if run_name:
+            run_dir = runs_dir / run_name
+            if run_dir.exists() and run_dir.is_dir():
+                if key != 'active_run':
+                    update_index(task_dir, {'active_run': run_name})
+                return run_name, run_dir
+
+    candidates = []
+    for child in runs_dir.iterdir():
+        if child.is_dir() and RUN_PREFIX_RE.match(child.name):
+            candidates.append(child)
+    if not candidates:
+        raise ValueError('No run folders found. Use --new-run to create one.')
+
+    candidates.sort(key=lambda item: item.name)
+    active_dir = candidates[-1]
+    update_index(task_dir, {'active_run': active_dir.name, 'last_run': active_dir.name})
+    return active_dir.name, active_dir
+
+
 def create_run(task_dir: Path, run_name: str) -> Dict[str, str]:
     created_at = timestamp()
     date_part = datestamp()
@@ -257,13 +318,7 @@ def create_run(task_dir: Path, run_name: str) -> Dict[str, str]:
     run_summary_path = run_dir / 'run_summary.md'
     write_text(run_summary_path, run_summary_template(run_number, run_short_name, created_at))
 
-    index_path = task_dir / 'index.json'
-    index_data = load_json(index_path)
-    if index_data:
-        index_data['last_updated'] = created_at
-        index_data['last_run'] = run_folder_name
-        save_json(index_path, index_data)
-
+    update_index(task_dir, {'active_run': run_folder_name, 'last_run': run_folder_name})
     append_log(task_dir, f'Run created: {run_folder_name}')
 
     return {
@@ -293,7 +348,7 @@ def create_task(args: argparse.Namespace) -> Dict[str, str]:
     runs_dir = task_dir / 'runs'
     runs_dir.mkdir(exist_ok=True)
 
-    first_run_name = sanitize_component(args.run, 'initial-intake')
+    first_run_name = sanitize_component(args.run or 'initial-intake', 'initial-intake')
     first_run_number = 1
     first_run_folder_name = f'{first_run_number:03d}-{first_run_name}-{date_part}'
     first_run_dir = runs_dir / first_run_folder_name
@@ -338,13 +393,42 @@ def read_request_value(args: argparse.Namespace) -> str:
     return args.request or ''
 
 
+def resume_task(args: argparse.Namespace) -> Dict[str, str]:
+    task_dir = Path(args.task_dir).expanduser().resolve()
+    if not task_dir.exists() or not task_dir.is_dir():
+        raise ValueError(f'Task directory not found: {task_dir}')
+
+    if args.run:
+        raise ValueError('Use --new-run with --run to create a new run. Without --new-run the script returns the active run.')
+
+    run_folder_name, run_dir = resolve_active_run(task_dir)
+    run_summary_path = ensure_run_summary(run_dir)
+
+    result = {
+        'mode': 'active_run',
+        'task_dir': str(task_dir),
+        'run_dir': str(run_dir),
+        'run_summary': str(run_summary_path),
+        'run_folder_name': run_folder_name,
+    }
+
+    request_value = read_request_value(args).strip()
+    if request_value:
+        append_request_clarification(task_dir, request_value)
+        update_index(task_dir, {'active_run': run_folder_name}, touch_time=True)
+        append_log(task_dir, f'Clarification appended while using active run: {run_folder_name}')
+        result['request_updated'] = str(task_dir / 'request.md')
+
+    return result
+
+
 def add_run(args: argparse.Namespace) -> Dict[str, str]:
     task_dir = Path(args.task_dir).expanduser().resolve()
     if not task_dir.exists() or not task_dir.is_dir():
         raise ValueError(f'Task directory not found: {task_dir}')
 
     result = {'mode': 'new_run', 'task_dir': str(task_dir)}
-    result.update(create_run(task_dir, args.run))
+    result.update(create_run(task_dir, args.run or 'work-session'))
 
     request_value = read_request_value(args).strip()
     if request_value:
@@ -356,12 +440,13 @@ def add_run(args: argparse.Namespace) -> Dict[str, str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Initialize a task folder or create a new run inside an existing task.'
+        description='Initialize a task folder, return the active run, or create a new run.'
     )
     parser.add_argument('title', nargs='?', help='Task title when creating a new task.')
     parser.add_argument('--root', default='tasks', help='Task root directory. Defaults to ./tasks')
-    parser.add_argument('--run', default='initial-intake', help='Run name. Defaults to initial-intake')
-    parser.add_argument('--task-dir', help='Existing task directory. When provided, create a new run inside it.')
+    parser.add_argument('--run', help='Run name. Used for a new task or with --new-run.')
+    parser.add_argument('--task-dir', help='Existing task directory. Returns the active run unless --new-run is provided.')
+    parser.add_argument('--new-run', action='store_true', help='Create a new run inside an existing task.')
     parser.add_argument('--request', help='Original request text or a new clarification to append.')
     parser.add_argument('--request-file', help='Read request text from a UTF-8 text file.')
     parser.add_argument('--json', action='store_true', help='Print machine-readable JSON output.')
@@ -375,8 +460,11 @@ def main() -> int:
     try:
         if args.request and args.request_file:
             raise ValueError('Use either --request or --request-file, not both.')
-        if args.task_dir:
+
+        if args.task_dir and args.new_run:
             result = add_run(args)
+        elif args.task_dir:
+            result = resume_task(args)
         else:
             result = create_task(args)
 
