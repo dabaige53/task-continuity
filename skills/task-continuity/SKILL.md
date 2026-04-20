@@ -1,6 +1,6 @@
 ---
 name: task-continuity
-description: maintain continuity for long-running white-collar tasks by creating or resuming lightweight task folders, preserving the user's original request, keeping task.md as the single task context file, storing working files in the active run folder instead of dumping them in the task root, and reusing the active run for small follow-ups instead of opening a new run every turn. use when a user wants to continue a previous task, start work that should span multiple turns, or decide whether a similar existing task should be resumed instead of creating a new one.
+description: maintain continuity for long-running white-collar tasks by creating or resuming lightweight task folders, preserving the user's original request, keeping task.md as the single task context file, keeping request.md continuously synchronized with the latest user intent, storing working files in the active run folder instead of dumping them in the task root, and reusing the active run for small follow-ups instead of opening a new run every turn. use when a user wants to continue a previous task, start work that should span multiple turns, or decide whether a similar existing task should be resumed instead of creating a new one.
 ---
 
 # Task Continuity
@@ -16,12 +16,14 @@ This skill is for office work such as proposals, reports, summaries, meeting fol
 1. Treat one task folder as one long-lived unit of work.
 2. Keep `task.md` as the main context file. When entering a task, read `task.md` first.
 3. Preserve the user's original wording in `request.md`.
-4. Keep the task root minimal. The root is for task-level memory files only.
-5. Put working files, drafts, outputs, and revisions in the **active run folder** by default, not in the task root.
-6. A run is a meaningful work phase or work session, **not** a single user turn. Small follow-ups stay in the current active run.
-7. **Do not write tool calls or skill script invocations to any file.** They are ephemeral actions, not persistent outputs.
-8. Keep all outputs inside the task folder. Do not scatter files elsewhere unless the user explicitly requests it.
-9. Prefer lightweight structure and short updates over heavy project-management ceremony.
+4. Keep `request.md` continuously synchronized with the latest user intent. When the user adds, changes, removes, or clarifies requirements, constraints, preferences, acceptance criteria, source materials, or deliverables, append that change to `request.md` in the same working pass.
+5. Treat `request.md` as the canonical record of user intent over time: keep the original request at the top, then append dated or clearly separated clarifications underneath it. Do not silently replace prior intent unless the user explicitly supersedes it.
+6. Keep the task root minimal. The root is for task-level memory files only.
+7. Put working files, drafts, outputs, and revisions in the **active run folder** by default, not in the task root.
+8. A run is a meaningful work phase or work session, **not** a single user turn. Small follow-ups stay in the current active run.
+9. **Do not write tool calls or skill script invocations to any file.** They are ephemeral actions, not persistent outputs.
+10. Keep all outputs inside the task folder. Do not scatter files elsewhere unless the user explicitly requests it.
+11. Prefer lightweight structure and short updates over heavy project-management ceremony.
 
 ## Default Location
 
@@ -62,6 +64,30 @@ See `references/task-files.md` for the purpose of each file and the expected sec
 
 Do **not** dump every file into the task root. Keep the root clean.
 
+## Synchronization Rules
+
+Before finishing any turn that changes the task, make sure the lightweight memory files are still aligned.
+
+Update `request.md` when:
+- the user adds a new requirement or example
+- the user changes the desired deliverable
+- the user adds or removes constraints
+- the user changes tone, audience, format, or priority
+- the user supplies new source files, links, or reference materials
+- the user corrects a previous assumption
+
+Update `task.md` when:
+- the task-level objective, plan, status, or next step changes
+- you learn something that another ChatGPT instance would need to resume correctly
+- the active risks, blockers, or assumptions change
+
+Update `run_summary.md` when:
+- working files were created or modified
+- the current run's immediate goal changed
+- you want the next turn to understand what happened in this run without opening many files
+
+If `request.md` and `task.md` conflict, reconcile them immediately before continuing. `request.md` is the source of truth for what the user wants; `task.md` explains how the task is currently being handled.
+
 ## Decide Whether To Resume Or Create
 
 When a new user message arrives and it looks like ongoing work:
@@ -97,10 +123,11 @@ python scripts/init_task.py "<task title>" --root "./tasks" --run "initial-intak
 
 After initialization:
 1. Save the user's original request in `request.md` if it was not passed to the script.
-2. Fill `task.md` immediately with the current objective, known context, constraints, and next step.
-3. Make sure `index.json` reflects useful aliases, tags, status, deliverable, `active_run`, and `last_run`.
-4. Use the first run folder for the current working session.
-5. Write working files for that session into the first run folder, not the task root.
+2. If the current turn already includes clarifications beyond the original request, append them to `request.md` immediately instead of waiting for a later turn.
+3. Fill `task.md` immediately with the current objective, known context, constraints, and next step.
+4. Make sure `index.json` reflects useful aliases, tags, status, deliverable, `active_run`, and `last_run`.
+5. Use the first run folder for the current working session.
+6. Write working files for that session into the first run folder, not the task root.
 
 ## Resume An Existing Task
 
@@ -113,6 +140,8 @@ When resuming, read in this order:
 6. specific files inside the active run or latest relevant run only if more detail is needed
 
 Do not re-read every file by default. Start from the lightweight files above and expand only when necessary.
+
+After reading, check whether `request.md` still reflects the latest user intent from the conversation. If it is stale or incomplete, update it before producing new work.
 
 ## Use The Active Run
 
@@ -171,11 +200,12 @@ Do **not** create a new run for every message.
 While a run is active:
 1. Keep updating working files inside the active run folder.
 2. Update the same `run_summary.md` as the work evolves.
-3. Update `task.md` whenever the task-level understanding changes.
-4. Update `index.json` with current status, tags, aliases, deliverable, `last_updated`, `active_run`, and `last_run` when needed.
-5. Append key milestones to `task.log`.
-6. Add repeatable mistakes, risks, or user dislikes to `error_notes.md`.
-7. Append new user clarifications to `request.md` if the task scope changes.
+3. Update `request.md` on any turn that materially changes user intent, even if the overall task scope does not change.
+4. Update `task.md` whenever the task-level understanding changes.
+5. Update `index.json` with current status, tags, aliases, deliverable, `last_updated`, `active_run`, and `last_run` when needed.
+6. Append key milestones to `task.log`.
+7. Add repeatable mistakes, risks, or user dislikes to `error_notes.md`.
+8. Before ending the turn, quickly check that `request.md`, `task.md`, and `run_summary.md` are mutually consistent at their own levels.
 
 When a run is effectively done and a new phase begins, then create a new run.
 
@@ -184,7 +214,7 @@ When a run is effectively done and a new phase begins, then create a new run.
 Keep files short, current, and useful.
 
 - `task.md`: dynamic task memory and current status
-- `request.md`: original request and later clarifications in the user's own words when possible
+- `request.md`: original request plus subsequent clarifications, corrections, and superseding instructions in the user's own words when possible
 - `index.json`: lightweight machine-readable lookup file with `active_run` and `last_run`
 - `task.log`: timestamped milestones only
 - `error_notes.md`: things not to repeat
@@ -199,3 +229,4 @@ Keep files short, current, and useful.
 - Do not create a new run merely because one more instruction arrived.
 - Do not log tool calls, skill invocations, or intermediate API results to any file.
 - Do not place all output files in the task root; keep run-scoped files in the active run folder.
+- Do not treat `request.md` as a write-once file. It must stay current enough that another ChatGPT instance can reconstruct the latest user intent without re-reading the full conversation.
