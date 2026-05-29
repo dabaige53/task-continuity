@@ -132,15 +132,12 @@ def task_md_template(title: str, created_at: str, first_run_name: str) -> str:
 ## Current Status
 - in_progress
 
-## Original Intent
-- Summarize what the user is truly trying to achieve.
-
 ## Current Objective
 - State the most important current goal.
 
 ## Known Context
 - Record the most important context that future sessions must know.
-- Keep this section updated. This is the main context entry point for the task.
+- Keep this section current and compact. It is the main resume entry point.
 
 ## User Preferences
 - Capture task-specific user preferences, tone, format, or workflow expectations.
@@ -151,6 +148,16 @@ def task_md_template(title: str, created_at: str, first_run_name: str) -> str:
 ## Decisions Already Made
 - List decisions that should not be re-litigated unless the user changes direction.
 
+## Canonical Files
+### Materials
+- Add stable source files or briefs from `materials/`.
+
+### Knowledge
+- Add reusable analyses, decisions, schemas, or checklists from `knowledge/`.
+
+### Current Deliverables
+- Add latest canonical outputs from `deliverables/current/`.
+
 ## Progress
 ### Done
 - 
@@ -160,9 +167,6 @@ def task_md_template(title: str, created_at: str, first_run_name: str) -> str:
 
 ### Pending
 - 
-
-## Key Materials
-- Add important source files, outputs, or references here.
 
 ## Risks / Open Questions
 - Track uncertainty, blockers, or assumptions that might change the work.
@@ -192,7 +196,7 @@ def error_notes_template() -> str:
 
 
 def run_summary_template(run_number: int, run_name: str, created_at: str) -> str:
-    return f'''# Run {run_number:03d} — {run_name}
+    return f'''# Run {run_number:03d} - {run_name}
 
 ## Date
 {created_at}
@@ -206,7 +210,13 @@ def run_summary_template(run_number: int, run_name: str, created_at: str) -> str
 ## Inputs Reviewed
 - 
 
-## Outputs
+## Files Created Or Modified
+- 
+
+## Promoted To Task Root
+- 
+
+## Superseded Or Reused
 - 
 
 ## Decisions
@@ -229,6 +239,18 @@ def default_index(title: str, short_name: str, created_at: str, run_folder_name:
         'aliases': [],
         'tags': [],
         'deliverable': '',
+        'durable_dirs': {
+            'materials': 'materials',
+            'knowledge': 'knowledge',
+            'deliverables': 'deliverables/current',
+            'archive': 'archive',
+        },
+        'canonical_files': {
+            'materials': [],
+            'knowledge': [],
+            'deliverables': [],
+        },
+        'active_run_policy': 'reuse active run until the work meaningfully shifts to a new phase',
     }
 
 
@@ -273,6 +295,43 @@ def update_index(task_dir: Path, updates: Dict[str, Any], touch_time: bool = Tru
     if touch_time:
         index_data['last_updated'] = timestamp()
     save_json(index_path, index_data)
+
+
+def ensure_task_structure(task_dir: Path) -> None:
+    """Ensure old task folders have the optimized durable-root layout."""
+    for relative in ('materials', 'knowledge', 'deliverables/current', 'archive', 'runs'):
+        (task_dir / relative).mkdir(parents=True, exist_ok=True)
+
+    index_path = task_dir / 'index.json'
+    index_data = load_json(index_path)
+    if index_data:
+        changed = False
+        if 'durable_dirs' not in index_data:
+            index_data['durable_dirs'] = {
+                'materials': 'materials',
+                'knowledge': 'knowledge',
+                'deliverables': 'deliverables/current',
+                'archive': 'archive',
+            }
+            changed = True
+        if 'canonical_files' not in index_data:
+            index_data['canonical_files'] = {
+                'materials': [],
+                'knowledge': [],
+                'deliverables': [],
+            }
+            changed = True
+        else:
+            for key in ('materials', 'knowledge', 'deliverables'):
+                if key not in index_data['canonical_files']:
+                    index_data['canonical_files'][key] = []
+                    changed = True
+        if 'active_run_policy' not in index_data:
+            index_data['active_run_policy'] = 'reuse active run until the work meaningfully shifts to a new phase'
+            changed = True
+        if changed:
+            index_data['last_updated'] = timestamp()
+            save_json(index_path, index_data)
 
 
 def resolve_active_run(task_dir: Path) -> Tuple[str, Path]:
@@ -345,8 +404,9 @@ def create_task(args: argparse.Namespace) -> Dict[str, str]:
     task_dir = unique_dir(requested_task_dir)
     task_dir.mkdir(parents=False, exist_ok=False)
 
+    for relative in ('materials', 'knowledge', 'deliverables/current', 'archive', 'runs'):
+        (task_dir / relative).mkdir(parents=True, exist_ok=True)
     runs_dir = task_dir / 'runs'
-    runs_dir.mkdir(exist_ok=True)
 
     first_run_name = sanitize_component(args.run or 'initial-intake', 'initial-intake')
     first_run_number = 1
@@ -398,6 +458,8 @@ def resume_task(args: argparse.Namespace) -> Dict[str, str]:
     if not task_dir.exists() or not task_dir.is_dir():
         raise ValueError(f'Task directory not found: {task_dir}')
 
+    ensure_task_structure(task_dir)
+
     if args.run:
         raise ValueError('Use --new-run with --run to create a new run. Without --new-run the script returns the active run.')
 
@@ -426,6 +488,8 @@ def add_run(args: argparse.Namespace) -> Dict[str, str]:
     task_dir = Path(args.task_dir).expanduser().resolve()
     if not task_dir.exists() or not task_dir.is_dir():
         raise ValueError(f'Task directory not found: {task_dir}')
+
+    ensure_task_structure(task_dir)
 
     result = {'mode': 'new_run', 'task_dir': str(task_dir)}
     result.update(create_run(task_dir, args.run or 'work-session'))

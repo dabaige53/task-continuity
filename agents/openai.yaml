@@ -1,0 +1,3 @@
+interface:
+  display_name: "Task Continuity"
+  short_description: "Keep long-running task folders current, deduplicated, and easy to resume."

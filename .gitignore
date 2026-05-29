@@ -1,0 +1,32 @@
+# BEGIN Codex generated-file ignores
+.DS_Store
+Thumbs.db
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+
+.venv/
+venv/
+
+node_modules/
+.pnpm-store/
+.npm-cache/
+.openclaw-npm-cache/
+
+.next/
+.vite/
+.turbo/
+dist/
+build/
+
+.cache/
+logs/
+*.log
+tmp/
+temp/
+# END Codex generated-file ignores
